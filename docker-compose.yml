@@ -1,0 +1,50 @@
+# Ambiente local do execution-service.
+# No esqueleto, a API só expõe health checks e Swagger. As variáveis de DynamoDB e
+# RabbitMQ passam a ser lidas na Etapa 2 (persistência e mensageria).
+services:
+  execution-api:
+    build: .
+    ports:
+      - "8083:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      DynamoDb__ServiceUrl: http://dynamodb:8000
+      DynamoDb__TableName: oficina-execucoes
+      # Credenciais fictícias: o DynamoDB Local não valida, mas o AWS SDK exige algum valor.
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      RabbitMq__Host: rabbitmq
+      RabbitMq__VirtualHost: oficina
+      RabbitMq__Username: oficina
+      RabbitMq__Password: oficina_dev
+      FaultInjection__RejeitarExecucao: "false"
+    depends_on:
+      dynamodb:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  dynamodb:
+    image: amazon/dynamodb-local:2.6.1
+    # -sharedDb: um único banco, independente da região e das credenciais usadas.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8000:8000"
+
+  rabbitmq:
+    # Versão a confirmar no spike S1 (MassTransit 8.x + RabbitMQ 4.x).
+    # O usuário "guest" só conecta via localhost, por isso o usuário próprio.
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: oficina
+      RABBITMQ_DEFAULT_PASS: oficina_dev
+      RABBITMQ_DEFAULT_VHOST: oficina
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
