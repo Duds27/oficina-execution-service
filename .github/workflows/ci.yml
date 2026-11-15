@@ -1,0 +1,50 @@
+name: CI
+
+# Roda em PR e push na main, e é reutilizado pelo CD (workflow_call).
+# O nome do job é o "required check" da proteção da main. Ele já tem o nome
+# definitivo; a cobertura >= 80% e o SonarCloud entram na Etapa 4.
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-quality:
+    name: build-test-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test -c Release --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: TestResults/**/coverage.cobertura.xml
+          if-no-files-found: ignore
+
+      - name: Docker build
+        run: docker build -t oficina-execution-service:ci .
