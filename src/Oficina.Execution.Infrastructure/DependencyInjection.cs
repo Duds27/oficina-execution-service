@@ -3,7 +3,9 @@ using Amazon.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Oficina.Execution.Application;
 using Oficina.Execution.Application.Abstractions;
+using Oficina.Execution.Infrastructure.Messaging;
 using Oficina.Execution.Infrastructure.Persistence;
 
 namespace Oficina.Execution.Infrastructure;
@@ -19,7 +21,11 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
+        services.Configure<FaultInjectionOptions>(configuration.GetSection(FaultInjectionOptions.Secao));
+
+        // A persistência primeiro: a tabela fica pronta antes de o bus começar a consumir.
         services.AddPersistencia(configuration);
+        services.AddMensageria(configuration);
         return services;
     }
 

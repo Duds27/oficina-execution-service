@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Oficina.Execution.API.Middleware;
@@ -91,6 +92,13 @@ try
     });
 
     var app = builder.Build();
+
+    // Falha simulada ligada muda o comportamento da saga inteira: fica explícito no log.
+    var falhas = app.Services.GetRequiredService<IOptions<FaultInjectionOptions>>().Value;
+    if (falhas.RejeitarExecucao)
+        Log.Warning("FaultInjection:RejeitarExecucao ligado: todo IniciarExecucao será rejeitado com \"{Motivo}\"", FaultInjectionOptions.MotivoRejeicaoSimulada);
+    else
+        Log.Information("FaultInjection:RejeitarExecucao desligado");
 
     if (app.Environment.IsDevelopment())
     {

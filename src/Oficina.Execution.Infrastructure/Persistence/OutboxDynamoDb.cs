@@ -6,8 +6,8 @@ using static Oficina.Execution.Infrastructure.Persistence.TabelaExecucoes;
 
 namespace Oficina.Execution.Infrastructure.Persistence;
 
-/// <summary>Leitura e limpeza do outbox, para o publicador.</summary>
-internal sealed class OutboxDynamoDb
+/// <summary>Leitura e limpeza do outbox, para o <see cref="Messaging.OutboxPublisher"/>.</summary>
+internal sealed class OutboxDynamoDb : Messaging.IFonteOutbox
 {
     private readonly IAmazonDynamoDB _dynamo;
     private readonly string _tabela;
