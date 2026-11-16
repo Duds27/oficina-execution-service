@@ -1,5 +1,7 @@
 # oficina-execution-service
 
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Duds27_oficina-execution-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Duds27_oficina-execution-service) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=Duds27_oficina-execution-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=Duds27_oficina-execution-service)
+
 Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOAT, Fase 4).
 
 > **Estado atual:** [Etapa 2](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-2-execution-service.md) implementada: domínio, DynamoDB (*single-table* + outbox próprio), consumers da saga, API da fila e Terraform. Os manifestos Kubernetes e o deploy na AWS entram na Etapa 4.
@@ -149,8 +151,11 @@ terraform apply -var="environment=$ENV" -var="state_bucket=$TF_STATE_BUCKET"
 
 ## CI
 
-O `.github/workflows/ci.yml` roda em PR e push na `main`:
+O `.github/workflows/ci.yml` roda em PR e push na `main`, e o CD o reutiliza (`workflow_call`):
 
-- `build-test-quality` (*required check* da proteção da `main`): restore, build, testes com cobertura e build da imagem Docker.
+- `build-test-quality` (*required check* da proteção da `main`): restore, build, testes com cobertura (`coverlet.runsettings`, só os assemblies `Oficina.Execution.*`), SonarCloud, gate de cobertura e build da imagem Docker.
+- **Gate de cobertura:** o ReportGenerator junta a cobertura de todos os projetos de teste, e o passo falha se a de linhas ficar abaixo de 80%. O resumo vai para a página do run, e o relatório fica no artifact `coverage`.
+- **SonarCloud:** análise com `dotnet-sonarscanner`, cobertura em opencover e `sonar.qualitygate.wait=true`. Quality gate reprovado derruba o job. Em PR de fork ou do Dependabot, sem o `SONAR_TOKEN`, os passos do Sonar são pulados.
 - `terraform`: `fmt`, `validate` e `test` do `infra/`.
-- Cobertura mínima de 80% como gate e SonarCloud entram na [Etapa 4](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-4-plataforma-cicd.md). Hoje a cobertura de linhas é de cerca de 97%.
+
+Cobertura de linhas em 2026-11-16: 97,4%, com 130 testes.

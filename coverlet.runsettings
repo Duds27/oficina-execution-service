@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cobertura de código dos testes (coverlet). Uso:
+    dotnet test - -settings coverlet.runsettings
+  Sem exclusões por arquivo: o serviço não tem migrations (DynamoDB) nem código gerado.
+  Program.cs e DTOs continuam contando, como no billing-service.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <!-- cobertura: ReportGenerator (gate de 80%); opencover: SonarCloud. -->
+          <Format>cobertura,opencover</Format>
+          <Include>[Oficina.Execution.*]*</Include>
+          <!-- Sem CompilerGeneratedAttribute: o corpo dos métodos async fica numa classe gerada pelo compilador. -->
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+          <SkipAutoProps>true</SkipAutoProps>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
