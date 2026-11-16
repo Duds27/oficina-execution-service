@@ -99,3 +99,9 @@ node_modules/
 
 TestResults/
 .sonarqube/
+
+# Terraform (infra/)
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
