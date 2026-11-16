@@ -1,0 +1,17 @@
+# Roda o execution-service junto com o os-service, no mesmo RabbitMQ.
+#
+# 1. No repositório oficina-os-service (pasta OficinaMecanicaBackend): docker compose up --build
+# 2. Aqui: docker compose -f docker-compose.yml -f docker-compose.integrado.yml up --build execution-api dynamodb
+#
+# O execution-service deixa de subir o próprio RabbitMQ e usa o do os-service, publicado no
+# host (mesmo usuário, senha e vhost). Abrir uma OS no os-service gera o SolicitarDiagnostico,
+# e a execução aparece em http://localhost:8083/api/execucoes/fila.
+services:
+  execution-api:
+    environment:
+      RabbitMq__Host: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: !override
+      dynamodb:
+        condition: service_started
