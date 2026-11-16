@@ -12,6 +12,7 @@ public static class DependencyInjection
         // Relógio injetável: os testes controlam o tempo (ordem da fila, duração do reparo).
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ComandosSagaUseCases>();
+        services.AddSingleton<ExecucaoUseCases>();
         return services;
     }
 }
