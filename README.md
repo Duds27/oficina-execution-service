@@ -2,7 +2,7 @@
 
 Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOAT, Fase 4).
 
-> **Estado atual:** esqueleto da [Etapa 0](https://github.com/Duds27/tech-challenge-fiap/blob/main/docs/fase4/etapa-0-fundacao.md). A API tem health checks, logs estruturados, autenticação JWT e Swagger. O domínio, o DynamoDB e a mensageria entram na [Etapa 2](https://github.com/Duds27/tech-challenge-fiap/blob/main/docs/fase4/etapa-2-execution-service.md).
+> **Estado atual:** [Etapa 2](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-2-execution-service.md) implementada: domínio, DynamoDB (*single-table* + outbox próprio), consumers da saga, API da fila e Terraform. Os manifestos Kubernetes e o deploy na AWS entram na Etapa 4.
 
 ## Responsabilidades
 
@@ -16,34 +16,103 @@ Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOA
 - Orçamento e pagamento: são do `billing-service`.
 - Cadastro e ciclo de vida da OS: são do `os-service`.
 
-Os dados de que precisa chegam dentro das mensagens. Ver os [contratos de mensagens](https://github.com/Duds27/tech-challenge-fiap/blob/main/docs/contratos-mensagens.md).
+Os dados de que precisa chegam dentro das mensagens. Ver os [contratos de mensagens](https://github.com/Duds27/oficina-os-service/blob/main/docs/contratos-mensagens.md).
+
+## Etapas da execução
+
+```
+DiagnosticoPendente → EmDiagnostico → DiagnosticoConcluido → AguardandoExecucao → EmReparo → Finalizada
+                 (qualquer etapa não final) → Cancelada
+```
+
+| Quem | O quê | Etapa | Evento para a saga |
+| --- | --- | --- | --- |
+| Saga | `SolicitarDiagnostico` | → `DiagnosticoPendente` | — |
+| Mecânico | `POST …/diagnostico/iniciar` | → `EmDiagnostico` | `DiagnosticoIniciado` |
+| Mecânico | `POST …/diagnostico/concluir` | → `DiagnosticoConcluido` | `DiagnosticoConcluido` |
+| Saga | `IniciarExecucao` (pagamento confirmado) | → `AguardandoExecucao` | `ExecucaoIniciada` ou `ExecucaoRejeitada` |
+| Mecânico | `POST …/reparo/iniciar` | → `EmReparo` | — |
+| Mecânico | `POST …/finalizar` | → `Finalizada` | `ExecucaoFinalizada` (com a duração) |
+| Saga | `CancelarExecucao` (compensação) | → `Cancelada` | — |
+
+Regras que valem saber:
+
+- `IniciarExecucao` só é aceito com o diagnóstico concluído. Fora disso, a resposta é `ExecucaoRejeitada` com o motivo.
+- Uma rejeição com o diagnóstico concluído (na prática, a falha simulada) também encerra a execução como `Cancelada`. A saga compensa sem mandar `CancelarExecucao`, e a execução ficaria presa na fila.
+- `CancelarExecucao` em etapa final é ignorado. Se chegar antes do `SolicitarDiagnostico`, registra a execução já cancelada, e o pedido atrasado é ignorado (regra 5 da seção 5 dos contratos).
+
+## API
+
+Todas as rotas exigem JWT com papel `Admin` ou `Mecanico`. O token de cliente (login por CPF na Lambda) recebe 403. O mecânico e o autor dos apontamentos vêm do usuário do token.
+
+| Método | Rota | Descrição |
+| --- | --- | --- |
+| GET | `/api/execucoes/fila?etapa=&limite=` | Fila de uma etapa, por ordem de chegada nela (padrão: `DiagnosticoPendente`, 50 itens) |
+| GET | `/api/execucoes/{osId}` | Execução + linha do tempo de apontamentos |
+| POST | `/api/execucoes/{osId}/diagnostico/iniciar` | Inicia o diagnóstico |
+| POST | `/api/execucoes/{osId}/diagnostico/concluir` | Conclui o diagnóstico. Corpo: `{ "observacoes": "..." }` (opcional) |
+| POST | `/api/execucoes/{osId}/reparo/iniciar` | Marca o início do reparo |
+| POST | `/api/execucoes/{osId}/apontamentos` | Observação livre. Corpo: `{ "texto": "..." }` |
+| POST | `/api/execucoes/{osId}/finalizar` | Finaliza o reparo |
+
+Erros: `404` sem execução para a OS · `409` operação fora da etapa (com o motivo) · `400` parâmetro ou corpo inválido.
+
+## Persistência e mensageria
+
+- **DynamoDB, uma tabela só:**
+
+  | Item | PK | SK | Para quê |
+  | --- | --- | --- | --- |
+  | Execução | `EXEC#{osId}` | `META` | Agregado, com `Version` e a fila no GSI1 (`FILA#{etapa}` / `{entrada na etapa}#{osId}`) |
+  | Apontamento | `EXEC#{osId}` | `EVT#{data}#{id}` | Linha do tempo |
+  | Mensagem processada | `MSG#{messageId}` | `MSG` | Deduplicação, com TTL de 7 dias em `ExpiraEm` |
+  | Outbox | `OUTBOX#{id}` | `OUTBOX` | Eventos a publicar, em ordem pelo GSI2 |
+
+- **Uma transação por mudança** (`TransactWriteItems`): o `MSG#` com `attribute_not_exists`, o `META` com condição na `Version`, os apontamentos novos e o outbox. Mensagem repetida não grava nada; conflito de versão é reprocessado.
+- **Outbox:** o `OutboxPublisher` lê o GSI2 a cada 2 s, publica no RabbitMQ com `MessageId` = id do item e apaga. Se cair entre publicar e apagar, publica de novo com o mesmo `MessageId`, e o inbox do os-service descarta a repetida.
+- **MassTransit 8.4.1 + RabbitMQ**, no padrão do os-service: filas de comando com nome fixo (`execution-solicitar-diagnostico`, `execution-iniciar-execucao`, `execution-cancelar-execucao`), retry exponencial (5 tentativas, 200 ms a 30 s) e `<fila>_error` quando esgota. O redelivery atrasado fica para a Etapa 4.
+- **Logs:** todo consumo leva `CorrelationId`, `NumeroOS`, `OsId`, `TipoMensagem` e `MessageId`.
+
+## Configuração
+
+| Variável | Uso |
+| --- | --- |
+| `Jwt__Key`, `Jwt__Issuer`, `Jwt__Audience` | Mesmo JWT do os-service e da Lambda |
+| `DynamoDb__TableName` | Tabela (padrão `oficina-execucoes`; na AWS, o output do Terraform) |
+| `DynamoDb__ServiceUrl` | Só para o DynamoDB Local. Vazio na AWS: região e credenciais vêm do ambiente (IRSA) |
+| `RabbitMq__Host`, `__Port`, `__VirtualHost`, `__Username`, `__Password` | Broker |
+| `FaultInjection__RejeitarExecucao` | `true` faz todo `IniciarExecucao` ser rejeitado com "falha simulada" (demo da compensação C3). O valor é logado na inicialização |
+| `Outbox__IntervaloMs`, `Outbox__Lote` | Leitura do outbox (padrão 2000 ms, 25 itens) |
+
+No ambiente `Development`, o serviço cria a tabela no DynamoDB Local ao subir. Fora dele, a tabela tem que existir (Terraform).
 
 ## Estrutura
 
 ```
 src/
-  Oficina.Execution.Domain/          entidade Execucao e suas etapas
-  Oficina.Execution.Application/     casos de uso e portas
+  Oficina.Execution.Domain/          agregado Execucao, etapas e apontamentos
+  Oficina.Execution.Application/     casos de uso, contratos (Oficina.Contracts) e portas
   Oficina.Execution.Infrastructure/  DynamoDB (single-table + outbox próprio), MassTransit
-  Oficina.Execution.API/             controllers, health checks
+  Oficina.Execution.API/             controllers, autorização, health checks
+infra/                               Terraform: tabela, role IRSA e ECR
 tests/
-  Oficina.Execution.UnitTests/
-  Oficina.Execution.IntegrationTests/
+  Oficina.Execution.UnitTests/         domínio, casos de uso, consumers (test harness), outbox, contratos
+  Oficina.Execution.IntegrationTests/  DynamoDB Local e RabbitMQ (Testcontainers), API
 ```
 
-- **Versões:** os pacotes ficam centralizados em `Directory.Packages.props`.
+- **Versões:** os pacotes ficam centralizados em `Directory.Packages.props`. O MassTransit fica na 8.x (a 9 é comercial).
 - **Avisos:** no código de `src/`, todo aviso é tratado como erro (`src/Directory.Build.props`).
 - **SDK:** o `global.json` fixa o .NET 8.
 
 ## Como rodar
 
-Testes:
+Testes (os de integração sobem DynamoDB Local e RabbitMQ no Docker):
 
 ```bash
 dotnet test
 ```
 
-Serviço + DynamoDB Local + RabbitMQ:
+Serviço + DynamoDB Local + RabbitMQ próprio:
 
 ```bash
 docker compose up --build
@@ -53,11 +122,35 @@ docker compose up --build
 - Swagger: http://localhost:8083/swagger
 - RabbitMQ: http://localhost:15672 (usuário `oficina`, senha `oficina_dev`)
 
-Sem Docker: `dotnet run --project src/Oficina.Execution.API` (porta 8083).
+Junto com o os-service, no RabbitMQ dele (suba o compose do os-service antes):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.integrado.yml up --build execution-api dynamodb
+```
+
+Abrir uma OS no os-service gera o `SolicitarDiagnostico`, e a execução aparece na fila. Iniciar e concluir o diagnóstico aqui levam a saga do os-service a `EmDiagnostico` e depois a `AguardandoOrcamento`.
+
+Sem Docker: `dotnet run --project src/Oficina.Execution.API` (porta 8083; precisa do DynamoDB Local em `localhost:8000` e do RabbitMQ).
+
+## Infra (Terraform)
+
+`infra/` cria a tabela DynamoDB (on-demand, GSI1 e GSI2, TTL, point-in-time recovery), a role IRSA do pod e o ECR. O estado fica no bucket S3 da Fase 3 (`execution-service/<ambiente>/terraform.tfstate`), e o OIDC provider vem do estado do `oficina-infra-k8s`.
+
+```bash
+cd infra
+terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=execution-service/$ENV/terraform.tfstate" \
+  -backend-config="region=$AWS_REGION" -backend-config="dynamodb_table=$TF_LOCK_TABLE"
+terraform apply -var="environment=$ENV" -var="state_bucket=$TF_STATE_BUCKET"
+```
+
+- A role só pode ser assumida pela ServiceAccount `execution-service` do namespace `oficina-execution`.
+- A política dá só `GetItem`, `Query`, `PutItem`, `UpdateItem`, `DeleteItem` e `ConditionCheckItem` na tabela e nos índices. Não existe ação IAM `TransactWriteItems`: a transação é autorizada item a item.
+- `terraform test` roda sem conta AWS (provider mockado).
 
 ## CI
 
-O `.github/workflows/ci.yml` roda em PR e push na `main`: restore, build, testes com cobertura e build da imagem Docker.
+O `.github/workflows/ci.yml` roda em PR e push na `main`:
 
-- O job `build-test-quality` é o *required check* da proteção da `main`.
-- Cobertura mínima de 80% e SonarCloud entram na [Etapa 4](https://github.com/Duds27/tech-challenge-fiap/blob/main/docs/fase4/etapa-4-plataforma-cicd.md).
+- `build-test-quality` (*required check* da proteção da `main`): restore, build, testes com cobertura e build da imagem Docker.
+- `terraform`: `fmt`, `validate` e `test` do `infra/`.
+- Cobertura mínima de 80% como gate e SonarCloud entram na [Etapa 4](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-4-plataforma-cicd.md). Hoje a cobertura de linhas é de cerca de 97%.
