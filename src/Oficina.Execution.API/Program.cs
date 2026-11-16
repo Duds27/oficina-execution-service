@@ -1,9 +1,11 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Oficina.Execution.API.Middleware;
+using Oficina.Execution.API.Security;
 using Oficina.Execution.Application;
 using Oficina.Execution.Infrastructure;
 using Serilog;
@@ -52,12 +54,13 @@ try
                 ClockSkew = TimeSpan.Zero
             };
         });
-    builder.Services.AddAuthorization();
+    builder.Services.AddAuthorization(options =>
+        options.AddPolicy(Politicas.Oficina, p => p.RequireRole(Politicas.PapeisDaOficina)));
 
     builder.Services.AddControllers();
 
     // Liveness não tem checks. Readiness usa os checks com a tag "ready",
-    // registrados pela Infrastructure (banco e broker, a partir das próximas etapas).
+    // registrados pela Infrastructure (DynamoDB e RabbitMQ).
     builder.Services.AddHealthChecks();
 
     builder.Services.AddEndpointsApiExplorer();
@@ -91,6 +94,13 @@ try
     });
 
     var app = builder.Build();
+
+    // Falha simulada ligada muda o comportamento da saga inteira: fica explícito no log.
+    var falhas = app.Services.GetRequiredService<IOptions<FaultInjectionOptions>>().Value;
+    if (falhas.RejeitarExecucao)
+        Log.Warning("FaultInjection:RejeitarExecucao ligado: todo IniciarExecucao será rejeitado com \"{Motivo}\"", FaultInjectionOptions.MotivoRejeicaoSimulada);
+    else
+        Log.Information("FaultInjection:RejeitarExecucao desligado");
 
     if (app.Environment.IsDevelopment())
     {

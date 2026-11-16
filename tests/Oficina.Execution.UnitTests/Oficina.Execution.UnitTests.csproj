@@ -8,4 +8,9 @@
     <ProjectReference Include="..\..\src\Oficina.Execution.API\Oficina.Execution.API.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Snapshots dos contratos (docs/contratos-mensagens.md, seção 6). -->
+    <None Include="Contracts\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

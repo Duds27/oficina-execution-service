@@ -1,0 +1,16 @@
+{
+  "correlationId": "3f2c9a4e-8d1b-4c55-9a7e-2b6f0d9e1a11",
+  "osId": 42,
+  "numeroOS": "OS-20261115-0042",
+  "ocorridoEm": "2026-11-15T14:03:27.512Z",
+  "servicos": [
+    {
+      "descricao": "Troca de óleo",
+      "quantidade": "1"
+    },
+    {
+      "descricao": "Alinhamento",
+      "quantidade": "1.5"
+    }
+  ]
+}
