@@ -48,3 +48,30 @@ jobs:
 
       - name: Docker build
         run: docker build -t oficina-execution-service:ci .
+
+  # Terraform da tabela, da role IRSA e do ECR (infra/). Os testes usam provider
+  # mockado: não precisam de conta AWS nem do estado remoto.
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Init (sem backend)
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Test
+        run: terraform test
