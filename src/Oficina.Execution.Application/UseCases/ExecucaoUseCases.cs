@@ -68,12 +68,20 @@ public sealed class ExecucaoUseCases
             : new Resultado<ApontamentoDto>(resultado.Status, null, resultado.Erro);
     }
 
-    public Task<Resultado<ExecucaoDto>> FinalizarAsync(int osId, string autor, CancellationToken cancellationToken = default) =>
-        AlterarAsync(osId, (execucao, agora) =>
+    public async Task<Resultado<ExecucaoDto>> FinalizarAsync(int osId, string autor, CancellationToken cancellationToken = default)
+    {
+        var duracao = 0;
+        var resultado = await AlterarAsync(osId, (execucao, agora) =>
         {
-            var duracao = execucao.Finalizar(autor, agora);
+            duracao = execucao.Finalizar(autor, agora);
             return [FabricaMensagens.ExecucaoFinalizada(execucao, duracao, agora)];
         }, cancellationToken);
+
+        // Só depois de gravar: a operação pode rodar de novo num conflito de concorrência.
+        if (resultado.Status == StatusResultado.Ok)
+            MetricasExecucao.Duracao.Record(duracao);
+        return resultado;
+    }
 
     private async Task<Resultado<ExecucaoDto>> AlterarAsync(
         int osId,

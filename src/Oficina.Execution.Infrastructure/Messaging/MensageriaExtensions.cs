@@ -41,6 +41,9 @@ public static class MensageriaExtensions
                 });
 
                 cfg.UseConsumeFilter(typeof(EscopoDeLogFilter<>), context);
+                // CorrelationId, NumeroOS e MessageType nos logs de todo consumo (ContextoDeLog).
+                cfg.UseConsumeFilter(typeof(ContextoDeLogConsumeFilter<>), context);
+
                 cfg.ConfigureEndpoints(context);
             });
         });
