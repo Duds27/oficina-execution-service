@@ -145,10 +145,17 @@ internal static class ItensDynamoDb
 
     // ───────────── Outbox (OUTBOX#) ─────────────
 
+    /// <summary>
+    /// Item do outbox. Grava também o contexto do trace atual (W3C <c>traceparent</c>), para a
+    /// publicação, que acontece depois e em outra thread, continuar o mesmo trace.
+    /// </summary>
     internal static Dictionary<string, AttributeValue> ItemOutbox(Guid id, object mensagem, DateTime agora)
     {
         var tipo = mensagem.GetType();
-        return new Dictionary<string, AttributeValue>
+        var atual = System.Diagnostics.Activity.Current;
+        var traceparent = atual?.IdFormat == System.Diagnostics.ActivityIdFormat.W3C ? atual.Id : null;
+        var tracestate = traceparent is null ? null : atual!.TraceStateString;
+        var item = new Dictionary<string, AttributeValue>
         {
             [PK] = S(ChaveOutbox(id)),
             [SK] = S(TabelaExecucoes.Outbox),
@@ -160,13 +167,18 @@ internal static class ItensDynamoDb
             [Gsi2Pk] = S(TabelaExecucoes.Outbox),
             [Gsi2Sk] = S($"{Data(agora)}#{id:N}")
         };
+        Opcional(item, "Traceparent", traceparent);
+        Opcional(item, "Tracestate", tracestate);
+        return item;
     }
 
     internal static RegistroOutbox ParaRegistroOutbox(Dictionary<string, AttributeValue> item) => new(
         Guid.Parse(Texto(item, "Id")),
         Texto(item, "TipoMensagem"),
         Texto(item, "Corpo"),
-        DataObrigatoria(item, "CriadoEm"));
+        DataObrigatoria(item, "CriadoEm"),
+        item.TryGetValue("Traceparent", out var traceparent) ? traceparent.S : null,
+        item.TryGetValue("Tracestate", out var tracestate) ? tracestate.S : null);
 
     internal static Dictionary<string, AttributeValue> ChaveRegistroOutbox(Guid id) => new()
     {
@@ -217,5 +229,6 @@ internal static class ItensDynamoDb
             : null;
 }
 
-/// <summary>Mensagem esperando publicação no outbox.</summary>
-internal sealed record RegistroOutbox(Guid Id, string TipoMensagem, string Corpo, DateTime CriadoEm);
+/// <summary>Mensagem esperando publicação no outbox, com o contexto do trace que a gravou (se havia um).</summary>
+internal sealed record RegistroOutbox(
+    Guid Id, string TipoMensagem, string Corpo, DateTime CriadoEm, string? Traceparent = null, string? Tracestate = null);

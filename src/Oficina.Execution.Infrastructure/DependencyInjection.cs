@@ -53,6 +53,10 @@ public static class DependencyInjection
         // Antes de qualquer hosted service que use a tabela.
         services.AddHostedService<CriadorTabelaDesenvolvimento>();
 
+        // Gauge execucao.fila.tamanho (Etapa 5).
+        services.Configure<MetricasOptions>(configuration.GetSection(MetricasOptions.Secao));
+        services.AddHostedService<MonitorFila>();
+
         services.AddHealthChecks().AddCheck<DynamoDbHealthCheck>("dynamodb", tags: ["ready"]);
         return services;
     }

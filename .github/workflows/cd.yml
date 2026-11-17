@@ -71,7 +71,8 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           IMAGEM="$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
-          docker build -t "$IMAGEM" .
+          # SERVICE_VERSION vira o service.version dos traces e métricas.
+          docker build --build-arg SERVICE_VERSION="$GITHUB_SHA" -t "$IMAGEM" .
           docker push "$IMAGEM"
           echo "IMAGEM=$IMAGEM" >> "$GITHUB_ENV"
 
@@ -82,6 +83,7 @@ jobs:
       - name: Secret do pod (Secrets Manager)
         env:
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          NEW_RELIC_OTLP_ENDPOINT: ${{ vars.NEW_RELIC_OTLP_ENDPOINT }}
         run: |
           set -euo pipefail
           ler() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text; }
@@ -97,8 +99,11 @@ jobs:
 
           # Sem banco SQL: a tabela DynamoDB é acessada pela role IRSA da ServiceAccount.
 
+          # OpenTelemetry → New Relic por OTLP (traces, métricas e logs). Sem a license key, o
+          # endpoint não é definido e nada é exportado. Conta na UE: NEW_RELIC_OTLP_ENDPOINT.
           if [ -n "${NEW_RELIC_LICENSE_KEY:-}" ]; then
-            args+=(--from-literal=NEW_RELIC_LICENSE_KEY="$NEW_RELIC_LICENSE_KEY")
+            args+=(--from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${NEW_RELIC_OTLP_ENDPOINT:-https://otlp.nr-data.net:4317}")
+            args+=(--from-literal=OTEL_EXPORTER_OTLP_HEADERS="api-key=$NEW_RELIC_LICENSE_KEY")
           fi
 
           kubectl -n "$NAMESPACE" create secret generic "$APP-secrets" "${args[@]}" \
@@ -114,6 +119,8 @@ jobs:
           set -euo pipefail
           kustomize edit set image "$IMAGEM_KUSTOMIZE=$IMAGEM"
           sed -i "s|__TARGET_GROUP_ARN__|$TARGET_GROUP_ARN|g" targetgroupbinding.yaml
+          # deployment.environment dos traces: homolog ou prod.
+          sed -i "s|__AMBIENTE__|$GITHUB_REF_NAME|g" kustomization.yaml
           # Saídas do infra/ deste repo: dynamodb_table_name e irsa_role_arn.
           sed -i "s|__DYNAMODB_TABLE__|$DYNAMODB_TABLE|g; s|__AWS_REGION__|$AWS_REGION|g; s|__IRSA_ROLE_ARN__|$IRSA_ROLE_ARN|g" kustomization.yaml
           kustomize build . > /tmp/manifestos.yaml

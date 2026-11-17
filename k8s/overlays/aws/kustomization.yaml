@@ -43,6 +43,10 @@ patches:
       metadata:
         name: execution-service-config
       data:
+        # OpenTelemetry → New Relic. O endpoint e a license key vêm do Secret, montado pelo CD.
+        Observabilidade__Ambiente: "__AMBIENTE__"
+        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta"
+        OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "4095"
         # Trocados no CD: tabela do infra/ (DYNAMODB_TABLE) e região. As credenciais vêm
         # da role IRSA da ServiceAccount, sem chaves de acesso.
         DynamoDb__TableName: "__DYNAMODB_TABLE__"

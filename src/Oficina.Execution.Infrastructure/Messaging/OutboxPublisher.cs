@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using MassTransit;
 using Microsoft.Extensions.Hosting;
@@ -48,6 +49,14 @@ internal static class CatalogoMensagens
 /// </summary>
 internal sealed partial class OutboxPublisher : BackgroundService
 {
+    /// <summary>
+    /// Fonte dos spans da publicação. O span nasce filho do trace que gravou a mensagem, e o
+    /// publish do MassTransit fica dentro dele: o trace segue até o consumer do os-service.
+    /// </summary>
+    public const string NomeFonteTrace = "Oficina.Execution.Outbox";
+
+    private static readonly ActivitySource FonteTrace = new(NomeFonteTrace);
+
     private readonly IFonteOutbox _fonte;
     private readonly IBus _bus;
     private readonly OutboxPublisherOptions _opcoes;
@@ -101,6 +110,7 @@ internal sealed partial class OutboxPublisher : BackgroundService
                 var mensagem = JsonSerializer.Deserialize(registro.Corpo, tipo, ItensDynamoDb.JsonOutbox)
                     ?? throw new InvalidOperationException($"Item {registro.Id} do outbox sem corpo.");
 
+                using var span = IniciarSpan(registro, tipo);
                 await _bus.Publish(mensagem, tipo, Pipe.Execute<PublishContext>(contexto =>
                 {
                     contexto.MessageId = registro.Id;
@@ -122,6 +132,16 @@ internal sealed partial class OutboxPublisher : BackgroundService
         while (lote.Count == _opcoes.Lote);
 
         return total;
+    }
+
+    /// <summary>Span da publicação, filho do trace gravado com a mensagem (ou raiz, se ela não tinha).</summary>
+    internal static Activity? IniciarSpan(RegistroOutbox registro, Type tipo)
+    {
+        var pai = ActivityContext.TryParse(registro.Traceparent, registro.Tracestate, out var contexto) ? contexto : default;
+        var span = FonteTrace.StartActivity($"outbox publish {tipo.Name}", ActivityKind.Internal, pai);
+        span?.SetTag("messaging.message.id", registro.Id.ToString());
+        span?.SetTag("oficina.outbox.espera_ms", (long)(DateTime.UtcNow - registro.CriadoEm).TotalMilliseconds);
+        return span;
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Outbox: {Tipo} publicada (MessageId {MessageId})")]

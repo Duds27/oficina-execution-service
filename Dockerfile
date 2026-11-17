@@ -20,8 +20,12 @@ WORKDIR /app
 COPY --from=build /publish .
 
 # Usuário não-root 'app' (UID 1654), já presente nas imagens .NET 8.
-# A instrumentação do New Relic (agente ou OpenTelemetry) entra na Etapa 5, conforme o spike S2.
 USER $APP_UID
+
+# Observabilidade: o OpenTelemetry da aplicação manda traces, métricas e logs por OTLP
+# (src/Oficina.Execution.API/Observabilidade). SERVICE_VERSION vira o service.version; o CD passa o SHA.
+ARG SERVICE_VERSION=dev
+ENV SERVICE_VERSION=${SERVICE_VERSION}
 
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Oficina.Execution.API.dll"]
