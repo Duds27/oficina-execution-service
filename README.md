@@ -4,7 +4,7 @@
 
 Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOAT, Fase 4).
 
-> **Estado atual:** [Etapa 2](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-2-execution-service.md) concluída: domínio, DynamoDB (*single-table* + outbox próprio), consumers da saga, API da fila e Terraform. Na [Etapa 4](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-4-plataforma-cicd.md) entraram SonarCloud e o gate de cobertura no CI e os manifestos Kubernetes, com a ServiceAccount anotada para IRSA.
+> **Estado atual (Fase 4):** implementado e validado fora da AWS. Etapas 1 a 5 concluídas; a implantação no EKS, o New Relic com dados e o sandbox do Mercado Pago estão na [Etapa 6](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-6-documentacao-entrega.md#60-implantação-na-aws-e-validação-no-new-relic).
 
 ## Responsabilidades
 
@@ -19,6 +19,30 @@ Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOA
 - Cadastro e ciclo de vida da OS: são do `os-service`.
 
 Os dados de que precisa chegam dentro das mensagens. Ver os [contratos de mensagens](https://github.com/Duds27/oficina-os-service/blob/main/docs/contratos-mensagens.md).
+
+## Arquitetura do serviço
+
+```mermaid
+flowchart LR
+  subgraph entrada[Entrada]
+    api["API REST<br/>/api/execucoes (fila, diagnóstico,<br/>reparo, apontamentos, finalização)"]
+    filas["Consumers<br/>execution-solicitar-diagnostico<br/>execution-iniciar-execucao<br/>execution-cancelar-execucao"]
+  end
+  subgraph app[Application]
+    casos["Casos de uso<br/>e comandos da saga"]
+  end
+  dominio["Domain<br/>Execucao (etapas e apontamentos)"]
+  subgraph infra[Infrastructure]
+    ddb[("DynamoDB<br/>tabela única + outbox + inbox")]
+    pub["OutboxPublisher<br/>(publica e apaga)"]
+  end
+  api & filas --> casos --> dominio
+  casos --> ddb
+  ddb --> pub -->|eventos| mq[("RabbitMQ")]
+```
+
+Clean Architecture. A gravação de uma operação (execução, apontamentos, outbox e inbox) é uma transação
+condicional do DynamoDB. O `OutboxPublisher` publica depois, continuando o trace de quem gravou.
 
 ## Etapas da execução
 
@@ -43,7 +67,22 @@ Regras que valem saber:
 - Uma rejeição com o diagnóstico concluído (na prática, a falha simulada) também encerra a execução como `Cancelada`. A saga compensa sem mandar `CancelarExecucao`, e a execução ficaria presa na fila.
 - `CancelarExecucao` em etapa final é ignorado. Se chegar antes do `SolicitarDiagnostico`, registra a execução já cancelada, e o pedido atrasado é ignorado (regra 5 da seção 5 dos contratos).
 
+## Mensagens
+
+| Direção | Mensagem | Fila / exchange | Quando |
+| --- | --- | --- | --- |
+| Consome | `SolicitarDiagnostico` | `execution-solicitar-diagnostico` | OS aberta: a execução entra na fila |
+| Consome | `IniciarExecucao` | `execution-iniciar-execucao` | Pagamento confirmado: libera o reparo com os serviços aprovados |
+| Consome | `CancelarExecucao` | `execution-cancelar-execucao` | C1, C2 ou C3: encerra a execução |
+| Publica | `DiagnosticoIniciado` / `DiagnosticoConcluido` | `oficina.diagnostico-iniciado.v1` / `oficina.diagnostico-concluido.v1` | Mecânico inicia e conclui o diagnóstico |
+| Publica | `ExecucaoIniciada` / `ExecucaoRejeitada` | `oficina.execucao-iniciada.v1` / `oficina.execucao-rejeitada.v1` | Resposta ao `IniciarExecucao` (a rejeição dispara a C3) |
+| Publica | `ExecucaoFinalizada` | `oficina.execucao-finalizada.v1` | Reparo finalizado, com a duração |
+
+Contratos completos: [`contratos-mensagens.md`](https://github.com/Duds27/oficina-os-service/blob/main/docs/contratos-mensagens.md).
+
 ## API
+
+Swagger em `/swagger` no ambiente de desenvolvimento. O contrato completo está versionado em [`docs/openapi.json`](docs/openapi.json), conferido no CI.
 
 Todas as rotas exigem JWT com papel `Admin` ou `Mecanico`. O token de cliente (login por CPF na Lambda) recebe 403. O mecânico e o autor dos apontamentos vêm do usuário do token.
 
@@ -74,6 +113,33 @@ Erros: `404` sem execução para a OS · `409` operação fora da etapa (com o m
 - **Outbox:** o `OutboxPublisher` lê o GSI2 a cada 2 s, publica no RabbitMQ com `MessageId` = id do item e apaga. Se cair entre publicar e apagar, publica de novo com o mesmo `MessageId`, e o inbox do os-service descarta a repetida.
 - **MassTransit 8.4.1 + RabbitMQ**, no padrão do os-service: filas de comando com nome fixo (`execution-solicitar-diagnostico`, `execution-iniciar-execucao`, `execution-cancelar-execucao`), retry exponencial (5 tentativas, 200 ms a 30 s) e `<fila>_error` quando esgota. O redelivery atrasado fica para a Etapa 4.
 - **Logs:** todo consumo leva `CorrelationId`, `NumeroOS`, `OsId`, `TipoMensagem` e `MessageId`.
+
+## Saga: estratégia e justificativa
+
+A OS atravessa os 3 serviços numa saga **orquestrada**:
+
+- **o os-service guarda o estado:** é a máquina de estados do MassTransit, gravada no MySQL;
+- **o os-service manda os comandos:** um para cada passo;
+- **os outros dois só respondem:** o billing e o execution executam o comando e publicam eventos, sem conhecer a saga.
+
+**Por quê** ([ADR-006](https://github.com/Duds27/oficina-os-service/blob/main/docs/architecture/adrs/ADR-006-saga-orquestrada.md)):
+
+- o fluxo e as compensações ficam num lugar só;
+- dá para responder "em que passo esta OS parou?" (`GET /api/ordens-servico/{id}/saga`);
+- o fluxo inteiro pode ser testado de ponta a ponta.
+
+Com coreografia, a lógica de compensação ficaria espalhada por três repositórios.
+
+**Papel deste serviço:** participante. Recebe `SolicitarDiagnostico`, `IniciarExecucao` e `CancelarExecucao` e publica o andamento. `ExecucaoRejeitada` (ou a flag de *fault injection*) dispara a compensação C3, com estorno.
+
+**Compensações:**
+
+- C1: orçamento recusado;
+- C2: pagamento recusado ou prazo vencido;
+- C3: execução rejeitada, com estorno.
+
+Os diagramas de cada uma estão nos [diagramas de sequência](https://github.com/Duds27/oficina-os-service/blob/main/docs/architecture/sequence-diagrams.md). O
+catálogo das mensagens, com as regras de eventos fora de ordem, está nos [contratos](https://github.com/Duds27/oficina-os-service/blob/main/docs/contratos-mensagens.md).
 
 ## Configuração
 
@@ -231,3 +297,24 @@ O `.github/workflows/ci.yml` roda em PR e push na `main`, e o CD o reutiliza (`w
 - `terraform`: `fmt`, `validate` e `test` do `infra/`.
 
 Cobertura de linhas em 2026-11-16: 97,4%, com 130 testes.
+
+### Pipeline
+
+```mermaid
+flowchart LR
+  pr["PR para a main"] --> ci["CI: build, testes (unitários e integração com Testcontainers),<br/>cobertura ≥ 80%, SonarCloud, OpenAPI e docker build"]
+  ci -->|checks obrigatórios + 1 aprovação| main["merge na main"]
+  main -->|PR main → homolog| homolog["push em homolog"]
+  homolog --> cd["CD: CI de novo → imagem no ECR → Secret do Secrets Manager<br/>→ kubectl apply (overlay aws) → rollout → smoke test"]
+  cd --> eks[("EKS")]
+  pr -.->|mudou infra/| plan["infra.yml: fmt, validate e plan comentado no PR"]
+  main -.->|mudou infra/| apply["infra.yml: apply com aprovação (Environment infra)"]
+```
+
+## Evidências de cobertura
+
+![Cobertura de linhas](docs/evidencias/badge_linecoverage.svg) ![Cobertura de ramos](docs/evidencias/badge_branchcoverage.svg)
+
+O relatório do CI da `main`, consolidado pelo ReportGenerator, está em [`docs/evidencias`](docs/evidencias/README.md),
+com o run e o commit de origem. O SonarCloud está em [Duds27_oficina-execution-service](https://sonarcloud.io/summary/new_code?id=Duds27_oficina-execution-service).
+O gate do CI derruba o build abaixo de 80% de linhas.
