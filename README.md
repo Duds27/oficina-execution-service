@@ -4,7 +4,7 @@
 
 Microsserviço de **diagnóstico e execução** da Oficina Mecânica (FIAP 15SOAT, Fase 4).
 
-> **Estado atual:** [Etapa 2](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-2-execution-service.md) implementada: domínio, DynamoDB (*single-table* + outbox próprio), consumers da saga, API da fila e Terraform. Os manifestos Kubernetes e o deploy na AWS entram na Etapa 4.
+> **Estado atual:** [Etapa 2](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-2-execution-service.md) concluída: domínio, DynamoDB (*single-table* + outbox próprio), consumers da saga, API da fila e Terraform. Na [Etapa 4](https://github.com/Duds27/oficina-os-service/blob/main/docs/fase4/etapa-4-plataforma-cicd.md) entraram SonarCloud e o gate de cobertura no CI e os manifestos Kubernetes, com a ServiceAccount anotada para IRSA.
 
 ## Responsabilidades
 
@@ -148,6 +148,13 @@ terraform apply -var="environment=$ENV" -var="state_bucket=$TF_STATE_BUCKET"
 - A role só pode ser assumida pela ServiceAccount `execution-service` do namespace `oficina-execution`.
 - A política dá só `GetItem`, `Query`, `PutItem`, `UpdateItem`, `DeleteItem` e `ConditionCheckItem` na tabela e nos índices. Não existe ação IAM `TransactWriteItems`: a transação é autorizada item a item.
 - `terraform test` roda sem conta AWS (provider mockado).
+
+## Kubernetes
+
+Os manifestos ficam em [`k8s/`](k8s/README.md): a base, o overlay `local` para o kind e o `aws`
+para o EKS. O serviço roda no namespace `oficina-execution` e usa o RabbitMQ em
+`rabbitmq.messaging.svc.cluster.local`. No kind, o overlay local do `oficina-os-service` sobe
+esse broker (aplique aquele primeiro), e o DynamoDB Local roda no próprio overlay.
 
 ## CI
 
