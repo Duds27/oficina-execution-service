@@ -19,12 +19,16 @@ const string ServiceName = "execution-service";
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(new CompactJsonFormatter())
-    .CreateBootstrapLogger();
+    .CreateLogger();
 
 try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    // preserveStaticLogger: cada host tem o próprio logger, e o estático (Log.Logger) fica só para
+    // os erros de inicialização. Sem isso, o UseSerilog congela o logger estático, e duas subidas
+    // ao mesmo tempo no mesmo processo (testes em paralelo) congelam o logger uma da outra: a
+    // segunda falha e o Program termina sem construir o host.
     builder.Host.UseSerilog((ctx, services, cfg) => cfg
         .ReadFrom.Configuration(ctx.Configuration)
         .ReadFrom.Services(services)
@@ -32,7 +36,7 @@ try
         .Enrich.WithProperty("Service", ServiceName)
         // trace.id/span.id em todo log e, com endpoint OTLP, o envio dos logs (Etapa 5).
         .ComTelemetria(ctx.Configuration, ctx.HostingEnvironment)
-        .WriteTo.Console(new CompactJsonFormatter()));
+        .WriteTo.Console(new CompactJsonFormatter()), preserveStaticLogger: true);
 
     // OpenTelemetry: traces e métricas, exportados por OTLP quando OTEL_EXPORTER_OTLP_ENDPOINT existe.
     builder.Services.AddObservabilidade(builder.Configuration, builder.Environment);
