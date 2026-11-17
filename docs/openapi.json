@@ -1,0 +1,715 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Oficina Execution API",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/execucoes/fila": {
+      "get": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Fila de uma etapa, por ordem de chegada nela.",
+        "parameters": [
+          {
+            "name": "etapa",
+            "in": "query",
+            "description": "Etapa (padrão: `DiagnosticoPendente`).",
+            "schema": {
+              "$ref": "#/components/schemas/EtapaExecucao"
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "description": "Quantos itens, de 1 a 100 (padrão: 50).",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ItemFilaDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}": {
+      "get": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Execução da OS com a linha do tempo de apontamentos.",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}/diagnostico/iniciar": {
+      "post": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "O mecânico (usuário do token) inicia o diagnóstico. Publica `DiagnosticoIniciado`.",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}/diagnostico/concluir": {
+      "post": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Conclui o diagnóstico em andamento, com observações. Publica `DiagnosticoConcluido`.",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConcluirDiagnosticoRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConcluirDiagnosticoRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConcluirDiagnosticoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}/reparo/iniciar": {
+      "post": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Marca o início do reparo, depois de a saga liberar a execução (pagamento confirmado).",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}/apontamentos": {
+      "post": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Registra uma observação livre na linha do tempo.",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApontamentoRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApontamentoRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApontamentoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApontamentoDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/execucoes/{osId}/finalizar": {
+      "post": {
+        "tags": [
+          "Execucoes"
+        ],
+        "summary": "Finaliza o reparo em andamento. Publica `ExecucaoFinalizada` com a duração.",
+        "parameters": [
+          {
+            "name": "osId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApontamentoDto": {
+        "type": "object",
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "nullable": true
+          },
+          "texto": {
+            "type": "string",
+            "nullable": true
+          },
+          "autor": {
+            "type": "string",
+            "nullable": true
+          },
+          "em": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApontamentoRequest": {
+        "type": "object",
+        "properties": {
+          "texto": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Corpo de `POST apontamentos`."
+      },
+      "ConcluirDiagnosticoRequest": {
+        "type": "object",
+        "properties": {
+          "observacoes": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Corpo de `POST diagnostico/concluir`."
+      },
+      "EtapaExecucao": {
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "type": "integer",
+        "description": "Etapas da execução de uma OS na oficina:\r\n`DiagnosticoPendente → EmDiagnostico → DiagnosticoConcluido → AguardandoExecucao → EmReparo → Finalizada`,\r\ne `Cancelada` a partir de qualquer etapa não final.\r\nPersistida pelo nome (nunca pelo número), como manda a seção 1.5 dos contratos.",
+        "format": "int32"
+      },
+      "ExecucaoDto": {
+        "type": "object",
+        "properties": {
+          "osId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "numeroOS": {
+            "type": "string",
+            "nullable": true
+          },
+          "etapa": {
+            "type": "string",
+            "nullable": true
+          },
+          "etapaDesde": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "veiculo": {
+            "$ref": "#/components/schemas/VeiculoDto"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "mecanico": {
+            "type": "string",
+            "nullable": true
+          },
+          "servicos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServicoDto"
+            },
+            "nullable": true
+          },
+          "observacoesDiagnostico": {
+            "type": "string",
+            "nullable": true
+          },
+          "motivoCancelamento": {
+            "type": "string",
+            "nullable": true
+          },
+          "criadaEm": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "diagnosticoIniciadoEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "diagnosticoConcluidoEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "execucaoIniciadaEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "reparoIniciadoEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finalizadaEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "canceladaEm": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "apontamentos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApontamentoDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Execução com a linha do tempo completa."
+      },
+      "ItemFilaDto": {
+        "type": "object",
+        "properties": {
+          "osId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "numeroOS": {
+            "type": "string",
+            "nullable": true
+          },
+          "etapa": {
+            "type": "string",
+            "nullable": true
+          },
+          "etapaDesde": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "veiculo": {
+            "$ref": "#/components/schemas/VeiculoDto"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "mecanico": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Linha da fila de trabalho de uma etapa."
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": { }
+      },
+      "ServicoDto": {
+        "type": "object",
+        "properties": {
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "quantidade": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ValidationProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": { }
+      },
+      "VeiculoDto": {
+        "type": "object",
+        "properties": {
+          "placa": {
+            "type": "string",
+            "nullable": true
+          },
+          "marca": {
+            "type": "string",
+            "nullable": true
+          },
+          "modelo": {
+            "type": "string",
+            "nullable": true
+          },
+          "ano": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "description": "Cole apenas o token JWT (sem o prefixo 'Bearer ').",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "Bearer": [ ]
+    }
+  ]
+}
