@@ -1,0 +1,61 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Overlay AWS (EKS), usado pelo CD em homolog e prod:
+#   - imagem do ECR: kustomize edit set image oficina-execution-service=<ecr>/<repo>:<sha>;
+#   - TargetGroupBinding: registra os pods no target group do serviço no NLB interno
+#     (__TARGET_GROUP_ARN__ = saída target_group_arns do oficina-infra-k8s, trocada no CD);
+#   - Secret execution-service-secrets: criado pelo CD a partir do Secrets Manager (não fica aqui).
+resources:
+  - ../../base
+  - targetgroupbinding.yaml
+
+images:
+  - name: oficina-execution-service
+    newName: oficina-execution-service
+    newTag: latest
+
+patches:
+  # Custo em homolog: 1 réplica, e o HPA sobe até 3 sob carga. Em prod, suba minReplicas.
+  - target:
+      kind: Deployment
+      name: execution-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: execution-service
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+  - target:
+      kind: ConfigMap
+      name: execution-service-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: execution-service-config
+      data:
+        # Trocados no CD: tabela do infra/ (DYNAMODB_TABLE) e região. As credenciais vêm
+        # da role IRSA da ServiceAccount, sem chaves de acesso.
+        DynamoDb__TableName: "__DYNAMODB_TABLE__"
+        AWS_REGION: "__AWS_REGION__"
+  # IRSA: o pod assume a role do infra/ (tabela DynamoDB), sem chaves de acesso.
+  # __IRSA_ROLE_ARN__ vem da variable IRSA_ROLE_ARN (saída irsa_role_arn do infra/), trocada no CD.
+  - target:
+      kind: ServiceAccount
+      name: execution-service
+    patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: execution-service
+        annotations:
+          eks.amazonaws.com/role-arn: "__IRSA_ROLE_ARN__"

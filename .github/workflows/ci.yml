@@ -1,30 +1,67 @@
 name: CI
 
 # Roda em PR e push na main, e é reutilizado pelo CD (workflow_call).
-# O nome do job é o "required check" da proteção da main. Ele já tem o nome
-# definitivo; a cobertura >= 80% e o SonarCloud entram na Etapa 4.
+# O job build-test-quality é o "required check" da proteção da main. Ele falha com:
+#   - teste vermelho;
+#   - cobertura de linhas abaixo de 80% (ReportGenerator, todos os projetos de teste juntos);
+#   - quality gate do SonarCloud reprovado (sonar.qualitygate.wait).
 on:
   pull_request:
     branches: [ main ]
   push:
     branches: [ main ]
-  workflow_call: {}
+  workflow_call:
+    secrets:
+      SONAR_TOKEN:
+        required: false
 
 permissions:
   contents: read
+
+env:
+  SONAR_ORGANIZATION: duds27
+  SONAR_PROJECT_KEY: Duds27_oficina-execution-service
+  COBERTURA_MINIMA: 80
 
 jobs:
   build-test-quality:
     name: build-test-quality
     runs-on: ubuntu-latest
+    env:
+      # Vazio em PR de fork e do Dependabot: os passos do Sonar são pulados.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # o Sonar usa o histórico (blame e código novo)
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
+      - name: Setup Java (SonarScanner)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Ferramentas
+        run: |
+          dotnet tool install --global dotnet-sonarscanner --version 11.3.0
+          dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.12
+
+      - name: SonarCloud (begin)
+        if: env.SONAR_TOKEN != ''
+        run: >
+          dotnet sonarscanner begin
+          /k:"${SONAR_PROJECT_KEY}" /o:"${SONAR_ORGANIZATION}"
+          /d:sonar.host.url="https://sonarcloud.io"
+          /d:sonar.token="${SONAR_TOKEN}"
+          /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml"
+          /d:sonar.qualitygate.wait=true
+          /d:sonar.qualitygate.timeout=300
 
       - name: Restore
         run: dotnet restore
@@ -32,25 +69,51 @@ jobs:
       - name: Build
         run: dotnet build -c Release --no-restore
 
+      # O coverlet.runsettings gera a cobertura em dois formatos: cobertura (ReportGenerator)
+      # e opencover (Sonar).
       - name: Test
         run: >
           dotnet test -c Release --no-build
           --collect:"XPlat Code Coverage"
+          --settings coverlet.runsettings
           --results-directory TestResults
+
+      - name: Relatório de cobertura
+        if: always()
+        run: |
+          reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:coverage-report \
+            -reporttypes:"Cobertura;MarkdownSummaryGithub;TextSummary"
+          cat coverage-report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SonarCloud (end + quality gate)
+        if: env.SONAR_TOKEN != ''
+        run: dotnet sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
+
+      - name: Cobertura mínima
+        run: |
+          taxa=$(sed -n 's/.*<coverage[^>]* line-rate="\([0-9.]*\)".*/\1/p' coverage-report/Cobertura.xml | head -1)
+          pct=$(awk -v t="$taxa" 'BEGIN { printf "%.1f", t * 100 }')
+          echo "Cobertura de linhas: ${pct}% (mínimo ${COBERTURA_MINIMA}%)"
+          if ! awk -v p="$pct" -v m="$COBERTURA_MINIMA" 'BEGIN { exit !(p >= m) }'; then
+            echo "::error::Cobertura de linhas ${pct}% abaixo do mínimo de ${COBERTURA_MINIMA}%."
+            exit 1
+          fi
 
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: TestResults/**/coverage.cobertura.xml
+          path: |
+            coverage-report/
+            TestResults/**/coverage.cobertura.xml
           if-no-files-found: ignore
 
       - name: Docker build
         run: docker build -t oficina-execution-service:ci .
 
-  # Terraform da tabela, da role IRSA e do ECR (infra/). Os testes usam provider
-  # mockado: não precisam de conta AWS nem do estado remoto.
+  # Terraform da tabela, da role IRSA e do ECR (infra/). Os testes usam provider mockado:
+  # não precisam de conta AWS nem do estado remoto.
   terraform:
     name: terraform
     runs-on: ubuntu-latest

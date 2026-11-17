@@ -1,0 +1,149 @@
+name: Infra
+
+# Terraform do infra/ (tabela DynamoDB, role IRSA e ECR).
+#   - PR na main que mexe em infra/: fmt, validate e plan de homolog, com o plano comentado no PR.
+#   - Push na main: apply em homolog, depois da aprovação no Environment "infra"
+#     (required reviewers).
+#   - Manual: plan ou apply no ambiente escolhido. O apply também passa pelo Environment "infra".
+# Variables e secret do repositório (não de Environment): AWS_REGION, TF_STATE_BUCKET,
+# TF_LOCK_TABLE e AWS_DEPLOY_ROLE_ARN. O estado de cada ambiente fica em
+# execution-service/<ambiente>/terraform.tfstate, e o do infra-k8s do mesmo ambiente precisa existir.
+on:
+  pull_request:
+    branches: [ main ]
+    paths: [ "infra/**", ".github/workflows/infra.yml" ]
+  push:
+    branches: [ main ]
+    paths: [ "infra/**", ".github/workflows/infra.yml" ]
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        type: choice
+        options: [ homolog, prod ]
+        default: homolog
+      acao:
+        type: choice
+        options: [ plan, apply ]
+        default: plan
+
+permissions:
+  id-token: write # OIDC → role AWS
+  contents: read
+  pull-requests: write # comentário do plano
+
+concurrency:
+  group: infra-${{ inputs.ambiente || 'homolog' }}
+  cancel-in-progress: false
+
+env:
+  AMBIENTE: ${{ inputs.ambiente || 'homolog' }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  plan:
+    name: Terraform plan
+    if: github.event_name == 'pull_request' || inputs.acao == 'plan'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configurar credenciais AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Init
+        run: >
+          terraform init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="key=execution-service/${AMBIENTE}/terraform.tfstate"
+          -backend-config="region=${{ vars.AWS_REGION }}"
+          -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}"
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        run: |
+          set -o pipefail
+          terraform plan -no-color -out=tfplan \
+            -var="environment=$AMBIENTE" \
+            -var="aws_region=${{ vars.AWS_REGION }}" \
+            -var="state_bucket=${{ vars.TF_STATE_BUCKET }}" | tee plan.txt
+
+      - name: Comentar o plano no PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marca = '<!-- plano-terraform -->';
+            let plano = fs.existsSync('infra/plan.txt') ? fs.readFileSync('infra/plan.txt', 'utf8') : 'O plan falhou: veja o log do job.';
+            // O resumo ("Plan: x to add...") fica no fim; o limite do comentário é 65 536 caracteres.
+            if (plano.length > 60000) plano = '(início cortado)\n' + plano.slice(-60000);
+            const corpo = `${marca}\n### Terraform plan (${process.env.AMBIENTE})\n\n<details><summary>Ver o plano</summary>\n\n\`\`\`\n${plano}\n\`\`\`\n</details>\n`;
+            const { data: comentarios } = await github.rest.issues.listComments({ ...context.repo, issue_number: context.issue.number, per_page: 100 });
+            const anterior = comentarios.find(c => c.body.includes(marca));
+            if (anterior) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: anterior.id, body: corpo });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body: corpo });
+            }
+
+  apply:
+    name: Terraform apply
+    if: github.event_name == 'push' || inputs.acao == 'apply'
+    runs-on: ubuntu-latest
+    environment: infra # required reviewers: o apply espera a aprovação
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configurar credenciais AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Init
+        run: >
+          terraform init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="key=execution-service/${AMBIENTE}/terraform.tfstate"
+          -backend-config="region=${{ vars.AWS_REGION }}"
+          -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}"
+
+      - name: Plan
+        run: >
+          terraform plan -no-color -out=tfplan
+          -var="environment=$AMBIENTE"
+          -var="aws_region=${{ vars.AWS_REGION }}"
+          -var="state_bucket=${{ vars.TF_STATE_BUCKET }}"
+
+      - name: Apply
+        run: terraform apply -no-color tfplan
+
+      - name: Saídas
+        run: terraform output -no-color

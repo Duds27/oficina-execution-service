@@ -1,0 +1,14 @@
+# Registra os pods do Service execution-service como alvos IP do target group do serviço no NLB interno
+# (oficina-infra-k8s). Quem reconcilia é o AWS Load Balancer Controller.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: execution-service
+  labels:
+    app: execution-service
+spec:
+  serviceRef:
+    name: execution-service
+    port: 80
+  targetType: ip
+  targetGroupARN: "__TARGET_GROUP_ARN__"

@@ -1,0 +1,54 @@
+# Manifestos Kubernetes — execution-service
+
+Kustomize com uma base e dois overlays. O serviço roda no namespace `oficina-execution` e fala com o
+RabbitMQ em `rabbitmq.messaging.svc.cluster.local`, o mesmo DNS no kind e no EKS.
+
+| Pasta | O que tem |
+| --- | --- |
+| `base/` | `Deployment` (2 réplicas, probes de startup, readiness e liveness, requests/limits, `envFrom` do ConfigMap e do Secret, ServiceAccount, `preStop` e `terminationGracePeriodSeconds: 45`), `Service` ClusterIP, `HPA` (CPU 70% / memória 80%, de 2 a 5), `ConfigMap` e `ServiceAccount` |
+| `overlays/local/` | kind: imagem `oficina-execution-service:local`, namespace, Secret de desenvolvimento, DynamoDB Local em memória (o serviço cria a tabela no boot). 1 réplica, HPA de 1 a 5 |
+| `overlays/aws/` | EKS: imagem do ECR, `TargetGroupBinding` no target group do serviço no NLB interno, a anotação IRSA da ServiceAccount (`__IRSA_ROLE_ARN__`) e o ConfigMap com a tabela e a região. 1 réplica, HPA de 1 a 3 (custo em homolog) |
+
+## Decisões
+
+- **Probes:** o `startupProbe` (`/health/live`, até 3 min) segura o liveness enquanto o
+  serviço sobe. O readiness (`/health/ready`) confere banco e RabbitMQ, e o liveness
+  (`/health/live`) só o processo.
+- **Parada:** o `preStop` espera 10 s para o pod sair do Service e do target group do NLB.
+  Depois vêm até 30 s de parada do host .NET, que deixa os consumers do MassTransit
+  terminarem a mensagem em andamento. São 45 s no total.
+- **Memória:** `DOTNET_gcServer=0` (GC de workstation). No kind, o pod ficou entre 80 e
+  165 Mi, de 30% a 65% do request de 256 Mi, então o HPA não escala parado.
+- **Segurança:** usuário 1654 (o `app` das imagens .NET), sem escalada de privilégio,
+  sem capabilities, seccomp `RuntimeDefault`.
+- **Namespace:** fica fora da base. Na AWS, quem cria é o `oficina-infra-k8s`. No kind, é o
+  overlay local.
+
+## Rodar no kind
+
+O RabbitMQ local vem do overlay local do `oficina-os-service`, que o sobe no namespace
+`messaging`. Aplique aquele primeiro.
+
+```bash
+docker build -t oficina-execution-service:local .
+kind load docker-image oficina-execution-service:local --name <cluster>
+kubectl apply -k k8s/overlays/local
+kubectl -n oficina-execution rollout status deploy/execution-service
+kubectl -n oficina-execution port-forward svc/execution-service 8080:80   # http://localhost:8080/swagger
+```
+
+O HPA precisa do metrics-server. No kind, use
+`kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml`
+com o argumento `--kubelet-insecure-tls`.
+
+## Na AWS
+
+O CD (`.github/workflows/cd.yml`) faz o deploy:
+
+1. cria o Secret `execution-service-secrets` a partir do Secrets Manager;
+2. troca a imagem e os placeholders (`__TARGET_GROUP_ARN__` e os demais);
+3. roda `kubectl apply -k k8s/overlays/aws` e espera o rollout.
+
+Validado em 2026-11-16 num cluster kind com os três serviços, cada um no seu namespace,
+e o broker em `messaging`. A saga completa passou: OS aberta, diagnóstico, orçamento,
+aprovação, pagamento simulado, execução e `Concluida`.

@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Núcleo do execution-service: fila de execução, diagnóstico e reparo (DynamoDB).
+# O namespace oficina-execution é criado pelo oficina-infra-k8s na AWS e pelo overlay local no kind.
+# Secret (execution-service-secrets) e banco ficam nos overlays.
+namespace: oficina-execution
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: oficina-mecanica
+    includeSelectors: false
+
+resources:
+  - serviceaccount.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
