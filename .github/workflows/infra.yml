@@ -5,6 +5,7 @@ name: Infra
 #   - Push na main: apply em homolog, depois da aprovação no Environment "infra"
 #     (required reviewers).
 #   - Manual: plan ou apply no ambiente escolhido. O apply também passa pelo Environment "infra".
+#   - Sem as variables e o secret abaixo, o plan é pulado com um aviso e o apply falha.
 # Variables e secret do repositório (não de Environment): AWS_REGION, TF_STATE_BUCKET,
 # TF_LOCK_TABLE e AWS_DEPLOY_ROLE_ARN. O estado de cada ambiente fica em
 # execution-service/<ambiente>/terraform.tfstate, e o do infra-k8s do mesmo ambiente precisa existir.
@@ -27,9 +28,7 @@ on:
         default: plan
 
 permissions:
-  id-token: write # OIDC → role AWS
   contents: read
-  pull-requests: write # comentário do plano
 
 concurrency:
   group: infra-${{ inputs.ambiente || 'homolog' }}
@@ -45,6 +44,10 @@ jobs:
     name: Terraform plan
     if: github.event_name == 'pull_request' || inputs.acao == 'plan'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC → role AWS
+      contents: read
+      pull-requests: write # comentário do plano
     defaults:
       run:
         working-directory: infra
@@ -52,21 +55,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Conferir a configuração da AWS
+        id: config
+        env:
+          TEM_ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
+        run: |
+          faltando=""
+          for v in AWS_REGION TF_STATE_BUCKET TF_LOCK_TABLE; do [ -n "${!v}" ] || faltando="$faltando $v"; done
+          [ "$TEM_ROLE" = "true" ] || faltando="$faltando AWS_DEPLOY_ROLE_ARN"
+          if [ -n "$faltando" ]; then
+            # Repositório ainda não ligado à AWS: o plan é pulado, sem derrubar o PR.
+            echo "::warning::Plan pulado: falta configurar no repositório:$faltando (README, seção Infra)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        if: steps.config.outputs.ok == 'true'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_wrapper: false
 
       - name: Configurar credenciais AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        if: steps.config.outputs.ok == 'true'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Format
+        if: steps.config.outputs.ok == 'true'
         run: terraform fmt -check -recursive
 
       - name: Init
+        if: steps.config.outputs.ok == 'true'
         run: >
           terraform init
           -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
@@ -75,9 +101,11 @@ jobs:
           -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}"
 
       - name: Validate
+        if: steps.config.outputs.ok == 'true'
         run: terraform validate
 
       - name: Plan
+        if: steps.config.outputs.ok == 'true'
         run: |
           set -o pipefail
           terraform plan -no-color -out=tfplan \
@@ -86,7 +114,7 @@ jobs:
             -var="state_bucket=${{ vars.TF_STATE_BUCKET }}" | tee plan.txt
 
       - name: Comentar o plano no PR
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && steps.config.outputs.ok == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -109,6 +137,9 @@ jobs:
     if: github.event_name == 'push' || inputs.acao == 'apply'
     runs-on: ubuntu-latest
     environment: infra # required reviewers: o apply espera a aprovação
+    permissions:
+      id-token: write # OIDC → role AWS
+      contents: read
     defaults:
       run:
         working-directory: infra
@@ -116,13 +147,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Conferir a configuração da AWS
+        env:
+          TEM_ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
+        run: |
+          faltando=""
+          for v in AWS_REGION TF_STATE_BUCKET TF_LOCK_TABLE; do [ -n "${!v}" ] || faltando="$faltando $v"; done
+          [ "$TEM_ROLE" = "true" ] || faltando="$faltando AWS_DEPLOY_ROLE_ARN"
+          if [ -n "$faltando" ]; then
+            echo "::error::Apply impossível: falta configurar no repositório:$faltando (README, seção Infra)."
+            exit 1
+          fi
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_wrapper: false
 
       - name: Configurar credenciais AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
