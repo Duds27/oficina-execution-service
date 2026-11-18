@@ -7,8 +7,8 @@ output "dynamodb_table_arn" {
   value = aws_dynamodb_table.execucoes.arn
 }
 
-output "irsa_role_arn" {
-  description = "ARN da role do pod (anotação eks.amazonaws.com/role-arn na ServiceAccount)."
+output "pod_role_arn" {
+  description = "ARN da role do pod, entregue à ServiceAccount pelo Pod Identity (sem anotação)."
   value       = aws_iam_role.execution_service.arn
 }
 

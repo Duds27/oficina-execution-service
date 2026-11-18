@@ -9,10 +9,8 @@ locals {
     ManagedBy   = "terraform"
   }
 
-  # OIDC provider do EKS, criado pelo oficina-infra-k8s (enable_irsa).
-  # O ARN termina em "oidc-provider/<url>"; a condição do trust usa só a URL.
-  oidc_provider_arn = data.terraform_remote_state.k8s.outputs.oidc_provider_arn
-  oidc_provider_url = element(split("oidc-provider/", local.oidc_provider_arn), 1)
+  # Cluster do oficina-infra-k8s, onde fica a associação do Pod Identity.
+  cluster_name = data.terraform_remote_state.k8s.outputs.cluster_name
 }
 
 data "terraform_remote_state" "k8s" {
@@ -92,34 +90,34 @@ resource "aws_dynamodb_table" "execucoes" {
   deletion_protection_enabled = var.environment == "prod"
 }
 
-# ───────────────────── IAM: role do pod (IRSA) ─────────────────────
-data "aws_iam_policy_document" "irsa_trust" {
+# ───────────────────── IAM: role do pod (Pod Identity) ─────────────────────
+# O EKS Pod Identity entrega a role à ServiceAccount, sem provider OIDC no IAM (a SCP da
+# organização da conta nega iam:CreateOpenIDConnectProvider, então o IRSA não é possível).
+data "aws_iam_policy_document" "pod_identity_trust" {
   statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
+    actions = ["sts:AssumeRole", "sts:TagSession"]
 
     principals {
-      type        = "Federated"
-      identifiers = [local.oidc_provider_arn]
-    }
-
-    # Só a ServiceAccount do serviço, no namespace dele.
-    condition {
-      test     = "StringEquals"
-      variable = "${local.oidc_provider_url}:sub"
-      values   = ["system:serviceaccount:${var.namespace}:${var.service_account}"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "${local.oidc_provider_url}:aud"
-      values   = ["sts.amazonaws.com"]
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
     }
   }
 }
 
 resource "aws_iam_role" "execution_service" {
   name               = "${local.name}-execution-service"
-  assume_role_policy = data.aws_iam_policy_document.irsa_trust.json
+  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+}
+
+# Só a ServiceAccount do serviço, no namespace dele, recebe a role. A associação tem que existir
+# antes do pod nascer: é na criação que o EKS injeta as variáveis de credencial.
+resource "aws_eks_pod_identity_association" "execution_service" {
+  cluster_name    = local.cluster_name
+  namespace       = var.namespace
+  service_account = var.service_account
+  role_arn        = aws_iam_role.execution_service.arn
+
+  tags = local.tags
 }
 
 # Menor privilégio: só a tabela e os índices dela, só as ações que o código usa.

@@ -127,7 +127,7 @@ jobs:
       - name: Docker build
         run: docker build -t oficina-execution-service:ci .
 
-  # Terraform da tabela, da role IRSA e do ECR (infra/). Os testes usam provider mockado:
+  # Terraform da tabela, da role do pod (Pod Identity) e do ECR (infra/). Os testes usam provider mockado:
   # não precisam de conta AWS nem do estado remoto.
   terraform:
     name: terraform

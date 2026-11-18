@@ -40,7 +40,6 @@ jobs:
       JWT_SECRET_ID: ${{ vars.JWT_SECRET_ID }}
       RABBITMQ_SECRET_ID: ${{ vars.RABBITMQ_SECRET_ID }}
       DYNAMODB_TABLE: ${{ vars.DYNAMODB_TABLE }}
-      IRSA_ROLE_ARN: ${{ vars.IRSA_ROLE_ARN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,7 +47,7 @@ jobs:
       - name: Conferir as variables do Environment
         run: |
           faltando=""
-          for v in AWS_REGION ECR_REPOSITORY EKS_CLUSTER_NAME TARGET_GROUP_ARN JWT_SECRET_ID RABBITMQ_SECRET_ID DYNAMODB_TABLE IRSA_ROLE_ARN; do
+          for v in AWS_REGION ECR_REPOSITORY EKS_CLUSTER_NAME TARGET_GROUP_ARN JWT_SECRET_ID RABBITMQ_SECRET_ID DYNAMODB_TABLE; do
             [ -n "${!v}" ] || faltando="$faltando $v"
           done
           if [ -n "$faltando" ]; then
@@ -56,10 +55,15 @@ jobs:
             exit 1
           fi
 
-      - name: Configurar credenciais AWS (OIDC)
+      # OIDC (secret AWS_DEPLOY_ROLE_ARN) ou chave de acesso de um usuário IAM (secrets
+      # AWS_ACCESS_KEY_ID e AWS_SECRET_ACCESS_KEY), para contas em que a organização
+      # bloqueia o provider OIDC do IAM. Cadastre só um dos dois.
+      - name: Configurar credenciais AWS
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Login no ECR
@@ -97,7 +101,7 @@ jobs:
           JWT=$(ler "$JWT_SECRET_ID")
           args+=(--from-literal=Jwt__Key="$(campo "$JWT" .key)")
 
-          # Sem banco SQL: a tabela DynamoDB é acessada pela role IRSA da ServiceAccount.
+          # Sem banco SQL: a tabela DynamoDB é acessada pela role que o Pod Identity associa à ServiceAccount.
 
           # OpenTelemetry → New Relic por OTLP (traces, métricas e logs). Sem a license key, o
           # endpoint não é definido e nada é exportado. Conta na UE: NEW_RELIC_OTLP_ENDPOINT.
@@ -121,8 +125,8 @@ jobs:
           sed -i "s|__TARGET_GROUP_ARN__|$TARGET_GROUP_ARN|g" targetgroupbinding.yaml
           # deployment.environment dos traces: homolog ou prod.
           sed -i "s|__AMBIENTE__|$GITHUB_REF_NAME|g" kustomization.yaml
-          # Saídas do infra/ deste repo: dynamodb_table_name e irsa_role_arn.
-          sed -i "s|__DYNAMODB_TABLE__|$DYNAMODB_TABLE|g; s|__AWS_REGION__|$AWS_REGION|g; s|__IRSA_ROLE_ARN__|$IRSA_ROLE_ARN|g" kustomization.yaml
+          # Saída do infra/ deste repo (dynamodb_table_name). A role do pod vem do Pod Identity.
+          sed -i "s|__DYNAMODB_TABLE__|$DYNAMODB_TABLE|g; s|__AWS_REGION__|$AWS_REGION|g" kustomization.yaml
           kustomize build . > /tmp/manifestos.yaml
           if grep -n '__[A-Z_]*__' /tmp/manifestos.yaml; then
             echo "::error::Placeholder sem valor nos manifestos (acima)."

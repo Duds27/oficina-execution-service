@@ -7,13 +7,19 @@ mock_provider "aws" {
       json = "{}"
     }
   }
+  # A associação do Pod Identity valida o formato do ARN da role.
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/oficina-homolog-execution-service"
+    }
+  }
 }
 
 override_data {
   target = data.terraform_remote_state.k8s
   values = {
     outputs = {
-      oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC123"
+      cluster_name = "oficina-homolog"
     }
   }
 }
@@ -57,22 +63,25 @@ run "tabela_single_table_com_ttl_e_pitr" {
   }
 }
 
-run "trust_do_irsa_so_aceita_a_service_account_do_servico" {
+run "role_do_pod_por_pod_identity_so_para_a_service_account_do_servico" {
   command = plan
 
   assert {
-    condition     = local.oidc_provider_url == "oidc.eks.us-east-1.amazonaws.com/id/ABC123"
-    error_message = "A URL do OIDC provider não foi extraída do ARN."
+    condition = (
+      aws_eks_pod_identity_association.execution_service.cluster_name == "oficina-homolog" &&
+      aws_eks_pod_identity_association.execution_service.namespace == "oficina-execution" &&
+      aws_eks_pod_identity_association.execution_service.service_account == "execution-service"
+    )
+    error_message = "A associação entrega a role só à ServiceAccount execution-service do namespace oficina-execution, no cluster do infra-k8s."
   }
 
   assert {
-    condition = anytrue([
-      for s in data.aws_iam_policy_document.irsa_trust.statement : anytrue([
-        for c in s.condition : c.variable == "oidc.eks.us-east-1.amazonaws.com/id/ABC123:sub"
-        && c.values == tolist(["system:serviceaccount:oficina-execution:execution-service"])
-      ])
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.pod_identity_trust.statement :
+      toset(s.actions) == toset(["sts:AssumeRole", "sts:TagSession"]) &&
+      anytrue([for p in s.principals : p.type == "Service" && contains(p.identifiers, "pods.eks.amazonaws.com")])
     ])
-    error_message = "O trust deve exigir a ServiceAccount execution-service no namespace oficina-execution."
+    error_message = "O trust aceita só o serviço do Pod Identity (pods.eks.amazonaws.com), com AssumeRole e TagSession."
   }
 }
 
