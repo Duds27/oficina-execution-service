@@ -1,7 +1,7 @@
 variable "aws_region" {
   type        = string
-  default     = "us-east-1"
-  description = "Região AWS."
+  default     = "us-east-2"
+  description = "Região AWS. A conta do grupo só libera a us-east-2 (SCP da organização)."
 }
 
 variable "project" {
@@ -28,11 +28,11 @@ variable "state_bucket" {
 variable "namespace" {
   type        = string
   default     = "oficina-execution"
-  description = "Namespace Kubernetes do serviço (o trust da role IRSA aceita só a ServiceAccount dele)."
+  description = "Namespace Kubernetes do serviço (a associação do Pod Identity entrega a role só à ServiceAccount dele)."
 }
 
 variable "service_account" {
   type        = string
   default     = "execution-service"
-  description = "Nome da ServiceAccount do pod, anotada com o ARN da role IRSA."
+  description = "Nome da ServiceAccount do pod, associada à role pelo Pod Identity."
 }

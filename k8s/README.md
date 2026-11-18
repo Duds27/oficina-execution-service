@@ -7,7 +7,7 @@ RabbitMQ em `rabbitmq.messaging.svc.cluster.local`, o mesmo DNS no kind e no EKS
 | --- | --- |
 | `base/` | `Deployment` (2 réplicas, probes de startup, readiness e liveness, requests/limits, `envFrom` do ConfigMap e do Secret, ServiceAccount, `preStop` e `terminationGracePeriodSeconds: 45`), `Service` ClusterIP, `HPA` (CPU 70% / memória 80%, de 2 a 5), `ConfigMap` e `ServiceAccount` |
 | `overlays/local/` | kind: imagem `oficina-execution-service:local`, namespace, Secret de desenvolvimento, DynamoDB Local em memória (o serviço cria a tabela no boot). 1 réplica, HPA de 1 a 5 |
-| `overlays/aws/` | EKS: imagem do ECR, `TargetGroupBinding` no target group do serviço no NLB interno, a anotação IRSA da ServiceAccount (`__IRSA_ROLE_ARN__`) e o ConfigMap com a tabela e a região. 1 réplica, HPA de 1 a 3 (custo em homolog) |
+| `overlays/aws/` | EKS: imagem do ECR, `TargetGroupBinding` no target group do serviço no NLB interno e o ConfigMap com a tabela e a região. A role do pod vem do Pod Identity (`infra/`), sem anotação na ServiceAccount. 1 réplica, HPA de 1 a 3 (custo em homolog) |
 
 ## Decisões
 

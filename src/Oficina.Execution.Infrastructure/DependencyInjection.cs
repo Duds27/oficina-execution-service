@@ -37,7 +37,7 @@ public static class DependencyInjection
         {
             var opcoes = sp.GetRequiredService<IOptions<DynamoDbOptions>>().Value;
 
-            // Na AWS: região e credenciais do ambiente (IRSA no EKS, via AWSSDK.SecurityToken).
+            // Na AWS: região e credenciais do ambiente (Pod Identity no EKS; IRSA também funciona, via AWSSDK.SecurityToken).
             if (string.IsNullOrWhiteSpace(opcoes.ServiceUrl))
                 return new AmazonDynamoDBClient();
 

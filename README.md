@@ -147,7 +147,7 @@ catálogo das mensagens, com as regras de eventos fora de ordem, está nos [cont
 | --- | --- |
 | `Jwt__Key`, `Jwt__Issuer`, `Jwt__Audience` | Mesmo JWT do os-service e da Lambda |
 | `DynamoDb__TableName` | Tabela (padrão `oficina-execucoes`; na AWS, o output do Terraform) |
-| `DynamoDb__ServiceUrl` | Só para o DynamoDB Local. Vazio na AWS: região e credenciais vêm do ambiente (IRSA) |
+| `DynamoDb__ServiceUrl` | Só para o DynamoDB Local. Vazio na AWS: região e credenciais vêm do ambiente (Pod Identity) |
 | `RabbitMq__Host`, `__Port`, `__VirtualHost`, `__Username`, `__Password` | Broker |
 | `FaultInjection__RejeitarExecucao` | `true` faz todo `IniciarExecucao` ser rejeitado com "falha simulada" (demo da compensação C3). O valor é logado na inicialização |
 | `Outbox__IntervaloMs`, `Outbox__Lote` | Leitura do outbox (padrão 2000 ms, 25 itens) |
@@ -162,7 +162,7 @@ src/
   Oficina.Execution.Application/     casos de uso, contratos (Oficina.Contracts) e portas
   Oficina.Execution.Infrastructure/  DynamoDB (single-table + outbox próprio), MassTransit
   Oficina.Execution.API/             controllers, autorização, health checks
-infra/                               Terraform: tabela, role IRSA e ECR
+infra/                               Terraform: tabela, role do pod (Pod Identity) e ECR
 tests/
   Oficina.Execution.UnitTests/         domínio, casos de uso, consumers (test harness), outbox, contratos
   Oficina.Execution.IntegrationTests/  DynamoDB Local e RabbitMQ (Testcontainers), API
@@ -202,7 +202,7 @@ Sem Docker: `dotnet run --project src/Oficina.Execution.API` (porta 8083; precis
 
 ## Infra (Terraform)
 
-`infra/` cria a tabela DynamoDB (on-demand, GSI1 e GSI2, TTL, point-in-time recovery), a role IRSA do pod e o ECR. O estado fica no bucket S3 da Fase 3 (`execution-service/<ambiente>/terraform.tfstate`), e o OIDC provider vem do estado do `oficina-infra-k8s`.
+`infra/` cria a tabela DynamoDB (on-demand, GSI1 e GSI2, TTL, point-in-time recovery), a role do pod com a associação do Pod Identity e o ECR. O estado fica no bucket do Terraform (`TF_STATE_BUCKET`, chave `execution-service/<ambiente>/terraform.tfstate`), e o nome do cluster vem do estado do `oficina-infra-k8s`.
 
 ```bash
 cd infra
@@ -211,7 +211,7 @@ terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=ex
 terraform apply -var="environment=$ENV" -var="state_bucket=$TF_STATE_BUCKET"
 ```
 
-- A role só pode ser assumida pela ServiceAccount `execution-service` do namespace `oficina-execution`.
+- A associação do Pod Identity entrega a role só à ServiceAccount `execution-service` do namespace `oficina-execution`. É Pod Identity, e não IRSA, porque a organização da conta nega o provider OIDC no IAM ([README do infra-k8s](https://github.com/Duds27/oficina-infra-k8s#conta-aws)).
 - A política dá só `GetItem`, `Query`, `PutItem`, `UpdateItem`, `DeleteItem` e `ConditionCheckItem` na tabela e nos índices. Não existe ação IAM `TransactWriteItems`: a transação é autorizada item a item.
 - `terraform test` roda sem conta AWS (provider mockado).
 
@@ -224,7 +224,7 @@ regras do Environment.
 
 1. Confere as variables do Environment e para com a lista do que falta.
 2. Builda e publica a imagem no ECR com a tag do commit.
-3. Monta o Secret `execution-service-secrets` a partir do Secrets Manager, com os valores mascarados no log. Sem credencial da AWS: a tabela é acessada pela role IRSA da ServiceAccount.
+3. Monta o Secret `execution-service-secrets` a partir do Secrets Manager, com os valores mascarados no log. Sem credencial da AWS no pod: a tabela é acessada pela role que o Pod Identity associa à ServiceAccount.
 4. Troca a imagem e os placeholders do overlay `aws`. Placeholder sem valor derruba o deploy antes do `apply`.
 5. `kubectl apply`, anota o pod com o hash do Secret (credencial trocada sem mudança de código também
    reinicia os pods) e espera o rollout (300 s).
@@ -232,15 +232,15 @@ regras do Environment.
 
 | Tipo (Environment `homolog`/`prod`) | Nome | De onde vem |
 | --- | --- | --- |
-| Variable | `AWS_REGION` | `us-east-1` |
+| Variable | `AWS_REGION` | `us-east-2` (a única região liberada na conta do grupo) |
 | Variable | `ECR_REPOSITORY` | saída `ecr_repository_url` do `infra/` (só o nome do repositório) |
 | Variable | `EKS_CLUSTER_NAME` | saída `cluster_name` do `oficina-infra-k8s` |
 | Variable | `TARGET_GROUP_ARN` | saída `target_group_arns["execution"]` do `oficina-infra-k8s` |
 | Variable | `RABBITMQ_SECRET_ID` | saída `rabbitmq_secret_ids["execution"]` do `oficina-infra-k8s` |
 | Variable | `JWT_SECRET_ID` | secret `{"key"}` da chave do JWT, o mesmo da Lambda |
 | Variable | `DYNAMODB_TABLE` | saída `dynamodb_table_name` do `infra/` |
-| Variable | `IRSA_ROLE_ARN` | saída `irsa_role_arn` do `infra/` |
-| Secret | `AWS_DEPLOY_ROLE_ARN` | role do GitHub OIDC (a mesma da Fase 3) |
+| Secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | chave do usuário IAM do CI, na conta sem OIDC ([README do infra-k8s](https://github.com/Duds27/oficina-infra-k8s#conta-aws)). O usuário precisa ser admin do cluster (`cluster_admin_arns`) |
+| Secret | `AWS_DEPLOY_ROLE_ARN` | alternativa às chaves, numa conta que permita o provider OIDC: role do GitHub OIDC. Cadastre só uma das duas formas |
 | Secret | `SONAR_TOKEN` | SonarCloud (já cadastrado na Etapa 0) |
 | Secret | `NEW_RELIC_LICENSE_KEY` | opcional; com ela, o CD liga o OpenTelemetry → New Relic (OTLP) |
 | Variable | `NEW_RELIC_OTLP_ENDPOINT` | opcional; padrão `https://otlp.nr-data.net:4317` (conta na UE: `https://otlp.eu01.nr-data.net:4317`) |
@@ -255,8 +255,8 @@ Para mudanças em `infra/`:
   (*required reviewers*).
 - **Manual:** `plan` ou `apply` no ambiente escolhido. O `apply` também passa pelo Environment `infra`.
 
-Usa as variables `AWS_REGION`, `TF_STATE_BUCKET` e `TF_LOCK_TABLE` e o secret `AWS_DEPLOY_ROLE_ARN`
-**do repositório**, não de um Environment. O estado do `infra-k8s` do mesmo ambiente precisa existir.
+Usa as variables `AWS_REGION`, `TF_STATE_BUCKET` e `TF_LOCK_TABLE` e a credencial da AWS (as chaves de
+acesso ou o `AWS_DEPLOY_ROLE_ARN`) **do repositório**, não de um Environment. O estado do `infra-k8s` do mesmo ambiente precisa existir.
 
 ## Observabilidade
 

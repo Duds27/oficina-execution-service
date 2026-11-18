@@ -9,7 +9,7 @@ public sealed class DynamoDbOptions
 
     /// <summary>
     /// Endereço do DynamoDB Local (docker-compose e testes). Vazio na AWS: o SDK usa a região
-    /// e as credenciais do ambiente (IRSA no EKS).
+    /// e as credenciais do ambiente (Pod Identity no EKS).
     /// </summary>
     public string? ServiceUrl { get; set; }
 

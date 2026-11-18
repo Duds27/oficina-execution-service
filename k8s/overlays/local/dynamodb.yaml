@@ -1,5 +1,5 @@
 # DynamoDB Local em memória (os dados somem quando o pod reinicia). Na AWS, a tabela é a do
-# infra/ deste repo, acessada pela role IRSA.
+# infra/ deste repo, acessada pela role do Pod Identity.
 apiVersion: v1
 kind: Service
 metadata:

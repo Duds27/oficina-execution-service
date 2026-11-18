@@ -47,19 +47,7 @@ patches:
         Observabilidade__Ambiente: "__AMBIENTE__"
         OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta"
         OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "4095"
-        # Trocados no CD: tabela do infra/ (DYNAMODB_TABLE) e região. As credenciais vêm
-        # da role IRSA da ServiceAccount, sem chaves de acesso.
+        # Trocados no CD: tabela do infra/ (DYNAMODB_TABLE) e região. As credenciais vêm da role
+        # que o Pod Identity associa à ServiceAccount (infra/), sem chaves de acesso nem anotação.
         DynamoDb__TableName: "__DYNAMODB_TABLE__"
         AWS_REGION: "__AWS_REGION__"
-  # IRSA: o pod assume a role do infra/ (tabela DynamoDB), sem chaves de acesso.
-  # __IRSA_ROLE_ARN__ vem da variable IRSA_ROLE_ARN (saída irsa_role_arn do infra/), trocada no CD.
-  - target:
-      kind: ServiceAccount
-      name: execution-service
-    patch: |-
-      apiVersion: v1
-      kind: ServiceAccount
-      metadata:
-        name: execution-service
-        annotations:
-          eks.amazonaws.com/role-arn: "__IRSA_ROLE_ARN__"
